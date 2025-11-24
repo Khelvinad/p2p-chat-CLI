@@ -105,10 +105,10 @@ class ChatGUI(ctk.CTk):
     def on_mode_change(self, choice):
         if choice == "Private":
             self.e_target.pack(side="left", padx=5, before=self.e_msg)
-            self.e_msg.configure(placeholder_text="Pesan secara private...")
+            self.e_msg.configure(placeholder_text="")
         else:
             self.e_target.pack_forget()
-            ph = "Broadcast ke SEMUA..." if choice == "Broadcast" else "Pesan ke grup..."
+            ph = "" if choice == "Broadcast" else ""
             self.e_msg.configure(placeholder_text=ph)
 
     def add_bubble(self, sender, message, is_me, is_system=False, context_label=None):
