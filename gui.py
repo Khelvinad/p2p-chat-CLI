@@ -59,6 +59,7 @@ class ChatGUI(ctk.CTk):
 
         self.combo_mode = ctk.CTkComboBox(self.ctrl_frame, values=["Broadcast", "Private", "Group"], command=self.on_mode_change, width=110)
         self.combo_mode.pack(side="left", padx=10, pady=10)
+        self.combo_mode.set("Broadcast") # Default mode
 
         self.e_target = ctk.CTkEntry(self.ctrl_frame, placeholder_text="Target...", width=120)
         # Default hidden
@@ -103,12 +104,18 @@ class ChatGUI(ctk.CTk):
             self.btn_connect.configure(state="normal", text="Connect & Validate")
 
     def on_mode_change(self, choice):
+        # FIX: Memperbaiki logic placeholder text
         if choice == "Private":
             self.e_target.pack(side="left", padx=5, before=self.e_msg)
-            self.e_msg.configure(placeholder_text="")
+            self.e_msg.configure(placeholder_text="Ketik pesan Private ke target...")
         else:
             self.e_target.pack_forget()
-            ph = "" if choice == "Broadcast" else ""
+            if choice == "Broadcast":
+                ph = "Broadcast ke SEMUA..."
+            elif choice == "Group":
+                ph = "Kirim pesan ke Group aktif..."
+            else:
+                ph = ""
             self.e_msg.configure(placeholder_text=ph)
 
     def add_bubble(self, sender, message, is_me, is_system=False, context_label=None):
@@ -192,15 +199,18 @@ class ChatGUI(ctk.CTk):
                     context = f"(Group: {grp_name})"
 
                 # 3. Deteksi Broadcast
-                elif "[BROADCAST]" in content or "GLOBAL" in sender:
+                elif "[BROADCAST]" in content: # FIX: Menghapus or "GLOBAL" in sender yang ambigu
                     content = content.replace("[BROADCAST]", "").strip()
-                    sender = sender.replace("[GLOBAL]", "").replace("[", "").strip()
+                    # Menghapus [GLOBAL] untuk compatibility log lama (jika ada)
+                    sender = sender.replace("[GLOBAL]", "").replace("[", "").strip() 
                     context = "(GLOBAL)"
 
                 is_me = (sender == "Me" or sender == self.e_user.get())
                 self.add_bubble(sender, content, is_me, context_label=context)
                 
-            except:
+            except Exception as e:
+                # Menambahkan logging error untuk debugging
+                print(f"[GUI PARSING ERROR] {e} for message: {clean_msg}")
                 self.add_bubble("System", clean_msg, False, is_system=True)
 
     def do_exit_group(self):
