@@ -6,31 +6,24 @@ import sys
 import atexit
 import base64
 
-# --- KONFIGURASI ---
-DNS_PORT = 9000
-
-# Global State
-CURRENT_GROUP = 'global'
-local_cache = {}
-
 # --- MODUL KEAMANAN (ENKRIPSI) ---
 class SimpleSecurity:
     KEY = "JARKOM2025"
 
     @staticmethod
     def encrypt(raw_text):
-        """Mengubah text jadi kode acak (XOR + Base64)"""
-        key_len = len(SimpleSecurity.KEY)
-        encrypted_chars = []
-        for i, char in enumerate(raw_text):
-            key_char = SimpleSecurity.KEY[i % key_len]
-            encrypted_c = chr(ord(char) ^ ord(key_char))
-            encrypted_chars.append(encrypted_c)
-        return base64.b64encode("".join(encrypted_chars).encode()).decode()
+        try:
+            key_len = len(SimpleSecurity.KEY)
+            encrypted_chars = []
+            for i, char in enumerate(raw_text):
+                key_char = SimpleSecurity.KEY[i % key_len]
+                encrypted_c = chr(ord(char) ^ ord(key_char))
+                encrypted_chars.append(encrypted_c)
+            return base64.b64encode("".join(encrypted_chars).encode()).decode()
+        except: return raw_text
 
     @staticmethod
     def decrypt(enc_text):
-        """Mengembalikan kode acak jadi text asli"""
         try:
             key_len = len(SimpleSecurity.KEY)
             decoded_str = base64.b64decode(enc_text).decode()
@@ -40,231 +33,253 @@ class SimpleSecurity:
                 decrypted_c = chr(ord(char) ^ ord(key_char))
                 decrypted_chars.append(decrypted_c)
             return "".join(decrypted_chars)
-        except:
-            return "[Gagal Dekripsi]"
+        except: return "[Gagal Dekripsi]"
 
-def get_lan_ip():
-    """Mendeteksi IP LAN otomatis"""
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        s.connect(('8.8.8.8', 80))
-        IP = s.getsockname()[0]
-    except:
-        IP = '127.0.0.1'
-    finally:
-        s.close()
-    return IP
+class ChatCore:
+    def __init__(self, dns_ip, dns_port, username, my_port, output_callback=None):
+        self.dns_ip = dns_ip
+        self.dns_port = int(dns_port)
+        self.username = username
+        self.my_port = int(my_port)
+        self.output_callback = output_callback
+        self.current_group = 'global'
+        self.local_cache = {}
+        self.running = False
 
-# --- MODUL DNS (UDP) ---
-def dns_register(domain, my_ip, my_port, group_name):
-    try:
+    def log(self, message):
+        if self.output_callback: self.output_callback(message)
+        else: print(message)
+
+    # --- VALIDASI PREVENTIF (FITUR BARU) ---
+    def validate_login(self):
+        """Mengecek apakah DNS Hidup & Port Lokal Aman sebelum Start"""
+        # 1. Cek Port Lokal
+        try:
+            test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            test_sock.bind(('0.0.0.0', self.my_port))
+            test_sock.close()
+        except OSError:
+            return False, f"Port {self.my_port} sudah digunakan aplikasi lain!"
+
+        # 2. Cek Koneksi DNS & Username
+        # Kita coba QUERY username kita sendiri. 
+        # Jika Timeout -> DNS Mati. 
+        # Jika Ada Hasil -> Username sudah dipakai orang lain.
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        msg = {
-            "command": "REGISTER", "domain": domain,
-            "ip": my_ip, "port": my_port,
-            "group": group_name, "ttl": 300
-        }
-        sock.sendto(json.dumps(msg).encode(), (DNS_IP, DNS_PORT))
-        sock.close()
-    except:
-        print("[!] Gagal konek ke DNS Server.")
+        sock.settimeout(2) # 2 detik timeout
+        try:
+            msg = {"command": "QUERY", "domain": self.username}
+            sock.sendto(json.dumps(msg).encode(), (self.dns_ip, self.dns_port))
+            data, _ = sock.recvfrom(1024)
+            resp = json.loads(data.decode())
+            
+            if resp['status'] == 'ok':
+                return False, f"Username '{self.username}' sudah dipakai orang lain!"
+            else:
+                # Username belum ada (Not Found) = Aman
+                return True, "OK"
+        except socket.timeout:
+            return False, f"DNS Server ({self.dns_ip}) tidak merespon/down!"
+        except Exception as e:
+            return False, f"Error Jaringan: {e}"
+        finally:
+            sock.close()
 
-def dns_deregister(domain):
-    try:
+    def get_lan_ip(self):
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(('8.8.8.8', 80))
+            IP = s.getsockname()[0]
+        except: IP = '127.0.0.1'
+        finally: s.close()
+        return IP
+
+    def start(self):
+        self.running = True
+        self.my_ip = self.get_lan_ip()
+        
+        # Start Listener
+        t = threading.Thread(target=self.start_listener, daemon=True)
+        t.start()
+        
+        # Register
+        self.dns_register(self.username, self.my_ip, self.my_port, self.current_group)
+        atexit.register(lambda: self.dns_deregister(self.username))
+        
+        self.log(f"[*] Connected to DNS. Welcome {self.username}!")
+        self.log(f"Welcome to {self.current_group}") # Trigger UI update
+
+    def stop(self):
+        self.running = False
+        self.dns_deregister(self.username)
+
+    # --- MODUL DNS ---
+    def dns_register(self, domain, my_ip, my_port, group_name):
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            msg = {"command": "REGISTER", "domain": domain, "ip": my_ip, "port": my_port, "group": group_name, "ttl": 300}
+            sock.sendto(json.dumps(msg).encode(), (self.dns_ip, self.dns_port))
+            sock.close()
+        except: pass
+
+    def dns_deregister(self, domain):
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            msg = {"command": "DEREGISTER", "domain": domain}
+            sock.sendto(json.dumps(msg).encode(), (self.dns_ip, self.dns_port))
+            sock.close()
+        except: pass
+
+    def dns_query(self, domain):
+        curr = time.time()
+        if domain in self.local_cache:
+            cached = self.local_cache[domain]
+            if curr < cached['expiry']: return cached['ip'], cached['port']
+            else: del self.local_cache[domain]
+
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        msg = {"command": "DEREGISTER", "domain": domain}
-        sock.sendto(json.dumps(msg).encode(), (DNS_IP, DNS_PORT))
-        sock.close()
-    except:
-        pass
+        sock.settimeout(2)
+        try:
+            sock.sendto(json.dumps({"command": "QUERY", "domain": domain}).encode(), (self.dns_ip, self.dns_port))
+            data, _ = sock.recvfrom(1024)
+            resp = json.loads(data.decode())
+            if resp['status'] == 'ok':
+                self.local_cache[domain] = {'ip': resp['ip'], 'port': resp['port'], 'expiry': curr + 300}
+                return resp['ip'], resp['port']
+            return None, None
+        except: return None, None
+        finally: sock.close()
 
-def dns_query(domain):
-    # Cek Cache Lokal
-    current_time = time.time()
-    if domain in local_cache:
-        cached = local_cache[domain]
-        if current_time < cached['expiry']:
-            return cached['ip'], cached['port']
+    def get_users_from_dns(self, target_group=None):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(2)
+        msg = {"command": "LIST"}
+        if target_group: msg['group'] = target_group
+        try:
+            sock.sendto(json.dumps(msg).encode(), (self.dns_ip, self.dns_port))
+            data, _ = sock.recvfrom(4096)
+            resp = json.loads(data.decode())
+            return resp['users'] if resp['status'] == 'ok' else []
+        except: return []
+        finally: sock.close()
+
+    # --- MODUL CHAT ---
+    def start_listener(self):
+        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            server.bind(('0.0.0.0', self.my_port))
+            server.listen(5)
+            while self.running:
+                conn, addr = server.accept()
+                threading.Thread(target=self.handle_incoming, args=(conn,)).start()
+        except: pass
+
+    def handle_incoming(self, conn):
+        try:
+            msg = conn.recv(4096).decode()
+            if msg.startswith("[SEC]"):
+                msg = SimpleSecurity.decrypt(msg[5:])
+
+            if ":" in msg:
+                sender, content = msg.split(":", 1)
+                # GUI akan memproses tag (!!PRIV!! dll) di fungsi update_display
+                self.log(f"[{sender}]: {content}")
+        except: pass
+        finally: conn.close()
+
+    def send_direct_msg(self, target, msg):
+        ip, port = self.dns_query(target)
+        if ip:
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(1)
+                s.connect((ip, int(port)))
+                
+                # Payload dengan Username
+                payload = f"{self.username}:{msg}"
+                secure = SimpleSecurity.encrypt(payload)
+                s.send(f"[SEC]{secure}".encode())
+                s.close()
+                return True
+            except: return False
+        return False
+
+    def broadcast_logic(self, message, target_group=None):
+        users = self.get_users_from_dns(target_group)
+        if self.username in users: users.remove(self.username)
+        if not users:
+            self.log("[Info] Tidak ada user lain.")
+            return
+        
+        # Tagging Context untuk penerima
+        context_tag = ""
+        if target_group is None: 
+            context_tag = "[BROADCAST] "
         else:
-            del local_cache[domain]
+            # Tag Group agar penerima tau ini dari group mana
+            context_tag = f"!!GRP:{target_group}!! "
 
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.settimeout(2)
-    msg = {"command": "QUERY", "domain": domain}
-    try:
-        sock.sendto(json.dumps(msg).encode(), (DNS_IP, DNS_PORT))
-        data, _ = sock.recvfrom(1024)
-        resp = json.loads(data.decode())
-        if resp['status'] == 'ok':
-            # Simpan ke cache
-            local_cache[domain] = {
-                'ip': resp['ip'], 'port': resp['port'], 
-                'expiry': current_time + 300
-            }
-            return resp['ip'], resp['port']
-        return None, None
-    except:
-        return None, None
-    finally:
-        sock.close()
-
-def get_users_from_dns(target_group=None):
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.settimeout(2)
-    msg = {"command": "LIST"}
-    if target_group: msg['group'] = target_group
-    try:
-        sock.sendto(json.dumps(msg).encode(), (DNS_IP, DNS_PORT))
-        data, _ = sock.recvfrom(4096)
-        resp = json.loads(data.decode())
-        return resp['users'] if resp['status'] == 'ok' else []
-    except:
-        return []
-    finally:
-        sock.close()
-
-# --- MODUL CHAT (TCP) ---
-def start_listener(my_port):
-    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server.bind(('0.0.0.0', my_port))
-    server.listen(5)
-    while True:
-        conn, addr = server.accept()
-        threading.Thread(target=handle_incoming, args=(conn,)).start()
-
-def handle_incoming(conn):
-    try:
-        msg = conn.recv(4096).decode()
+        final_msg = f"{context_tag}{message}"
         
-        # 1. DEKRIPSI PESAN
-        if msg.startswith("[SEC]"):
-            encrypted_content = msg[5:] 
-            msg = SimpleSecurity.decrypt(encrypted_content)
+        count = 0
+        for user in users:
+            if self.send_direct_msg(user, final_msg): count += 1
+        
+        # Balikan jumlah terkirim (opsional)
+        return count
 
-        # 2. TAMPILKAN PESAN
-        if ":" in msg:
-            sender, content = msg.split(":", 1)
-            sys.stdout.write(f"\r\033[K") # Hapus baris input
+    def switch_group(self, new_group):
+        if new_group == self.current_group: return
+        self.log(f"[*] Switching to room '{new_group}'...")
+        self.dns_deregister(self.username)
+        self.local_cache.clear()
+        self.current_group = new_group
+        self.dns_register(self.username, self.my_ip, self.my_port, self.current_group)
+        self.log(f"[Success] Welcome to {self.current_group}!")
+
+    def process_input(self, msg):
+        if not msg: return
+        
+        if msg.lower() == 'exit':
+            self.stop()
+            return
+
+        if msg.startswith('/join'):
+            try: self.switch_group(msg.split(" ", 1)[1].strip())
+            except: pass
+        elif msg == '/exitgroup':
+            self.switch_group('global')
+        
+        # Logic Pengiriman (GUI memanggil ini dengan format yg sudah disiapkan)
+        # Tapi kita perlu inject TAG agar penerima tau konteksnya
+        
+        elif msg.startswith('@broadcast '):
+            clean = msg.split(" ", 1)[1]
+            self.broadcast_logic(clean, target_group=None)
             
-            if "[BROADCAST]" in content:
-                clean_msg = content.replace('[BROADCAST]', '')
-                print(f"\033[91m[GLOBAL] {sender}: {clean_msg}\033[0m")
-            else:
-                print(f"[{sender}]: {content}")
-            
-            sys.stdout.write(f"[{CURRENT_GROUP}] You > ") 
-            sys.stdout.flush()
-    except:
-        pass
-    finally:
-        conn.close()
-
-def send_direct_msg(target, msg, my_username):
-    ip, port = dns_query(target)
-    if ip:
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(1)
-            s.connect((ip, int(port)))
-            
-            raw_payload = f"{my_username}:{msg}"
-            secure_payload = SimpleSecurity.encrypt(raw_payload)
-            final_packet = f"[SEC]{secure_payload}"
-            
-            # DEBUG: Tampilkan ini saat demo untuk bukti enkripsi jalan
-            # print(f"\n[DEBUG Encrypt] Asli: {msg} -> Kirim: {final_packet}")
-
-            s.send(final_packet.encode())
-            s.close()
-        except:
-            pass
-    else:
-        print(f"[!] User '{target}' tidak ditemukan.")
-
-def broadcast_logic(message, my_username, target_group=None):
-    users = get_users_from_dns(target_group)
-    if my_username in users: users.remove(my_username)
-    
-    if not users:
-        print("[Info] Tidak ada user lain.")
-        return
-
-    label = "[BROADCAST] " if target_group is None else ""
-    final_msg = f"{label}{message}"
-    
-    print(f"[*] Mengirim ke {len(users)} user...")
-    for user in users:
-        send_direct_msg(user, final_msg, my_username)
-
-def switch_group(new_group, username, my_ip, my_port):
-    global CURRENT_GROUP
-    if new_group == CURRENT_GROUP: return
-    
-    print(f"[*] Pindah ke room '{new_group}'...")
-    dns_deregister(username)
-    local_cache.clear()
-    CURRENT_GROUP = new_group
-    dns_register(username, my_ip, my_port, CURRENT_GROUP)
-    print(f"[Success] Welcome to {CURRENT_GROUP}!")
-
-# --- MAIN ---
-if __name__ == "__main__":
-    if len(sys.argv) != 4:
-        print("Usage: python3 chat.py <IP SERVER> <USERNAME> <PORT>")
-        sys.exit()
-
-    DNS_IP = sys.argv[1]
-    USERNAME = sys.argv[2]
-    MY_PORT = int(sys.argv[3])
-    MY_IP = get_lan_ip()
-
-    print("=== JARKOM P2P CHAT (SECURE + GROUPS) ===")
-    print(f"User: {USERNAME} | IP: {MY_IP}:{MY_PORT}")
-    
-    threading.Thread(target=start_listener, args=(MY_PORT,), daemon=True).start()
-    dns_register(USERNAME, MY_IP, MY_PORT, CURRENT_GROUP)
-    atexit.register(dns_deregister, USERNAME)
-
-    print("-" * 50)
-    print(" /join <nama>       : Pindah Room")
-    print(" /exitgroup         : Kembali ke Global")
-    print("-" * 50)
-    print(" @broadcast <pesan> : Kirim ke SEMUA USER (Lintas Group)")
-    print(" @nama <pesan>      : Chat Personal")
-    print("-" * 50)
-
-    while True:
-        try:
-            msg = input(f"[{CURRENT_GROUP}] You > ")
-            if not msg: continue
-            if msg.lower() == 'exit': break
-            
-            # Commands
-            if msg.startswith('/join '):
-                switch_group(msg.split(" ", 1)[1].strip(), USERNAME, MY_IP, MY_PORT)
-            elif msg.strip() == '/exitgroup':
-                switch_group('global', USERNAME, MY_IP, MY_PORT)
-            
-            # Broadcast Global
-            elif msg.startswith('@broadcast '):
-                broadcast_logic(msg.split(" ", 1)[1], USERNAME, target_group=None)
-            
-            # Personal Chat
-            elif msg.startswith('@'):
+        elif msg.startswith('@'):
+            # Private Chat
+            try:
                 parts = msg.split(" ", 1)
-                if len(parts) > 1:
-                    send_direct_msg(parts[0][1:], parts[1], USERNAME)
-            
-            # Group Chat (Default)
-            else:
-                if CURRENT_GROUP == 'global':
-                    print("[X] Di Global wajib tag nama (@user) atau @broadcast.")
+                target = parts[0][1:]
+                clean_msg = parts[1]
+                
+                # Inject Tag !!PRIV!!
+                final_msg = f"!!PRIV!! {clean_msg}"
+                
+                if self.send_direct_msg(target, final_msg):
+                    # Callback format khusus agar GUI bisa render "Me (Private)"
+                    self.log(f"[Me]: !!PRIV!! >{target}< {clean_msg}")
                 else:
-                    broadcast_logic(msg, USERNAME, target_group=CURRENT_GROUP)
-        
-        except KeyboardInterrupt:
-            break
-    
-    dns_deregister(USERNAME)
-    print("\nBye!")
+                    self.log(f"[!] Gagal kirim ke {target} (Offline/Unknown)")
+            except: self.log("[!] Format: @user pesan")
+            
+        else:
+            # Group Chat
+            if self.current_group == 'global':
+                self.log("[X] Global Lobby: Silahkan masuk ke group atau pilih chat broadcast/private!")
+            else:
+                self.broadcast_logic(msg, target_group=self.current_group)
+                # Log lokal agar muncul di bubble kita sendiri dengan label group
+                self.log(f"[Me]: !!GRP:{self.current_group}!! {msg}")
