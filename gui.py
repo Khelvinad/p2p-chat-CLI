@@ -63,7 +63,7 @@ class ChatGUI(ctk.CTk):
         self.e_target = ctk.CTkEntry(self.ctrl_frame, placeholder_text="Target...", width=120)
         # Default hidden
 
-        self.e_msg = ctk.CTkEntry(self.ctrl_frame, placeholder_text="", height=40)
+        self.e_msg = ctk.CTkEntry(self.ctrl_frame, placeholder_text="Broadcast ke SEMUA...", height=40)
         self.e_msg.pack(side="left", fill="x", expand=True, padx=10, pady=10)
         self.e_msg.bind("<Return>", self.send_msg)
         
@@ -108,7 +108,7 @@ class ChatGUI(ctk.CTk):
             self.e_msg.configure(placeholder_text="")
         else:
             self.e_target.pack_forget()
-            ph = "" if choice == "Broadcast" else ""z
+            ph = "" if choice == "Broadcast" else ""
             self.e_msg.configure(placeholder_text=ph)
 
     def add_bubble(self, sender, message, is_me, is_system=False, context_label=None):
