@@ -6,7 +6,6 @@ import sys
 import atexit
 import base64
 
-# --- MODUL KEAMANAN (ENKRIPSI) ---
 class SimpleSecurity:
     KEY = "JARKOM2025"
 
@@ -50,10 +49,7 @@ class ChatCore:
         if self.output_callback: self.output_callback(message)
         else: print(message)
 
-    # --- VALIDASI PREVENTIF (FITUR BARU) ---
     def validate_login(self):
-        """Mengecek apakah DNS Hidup & Port Lokal Aman sebelum Start"""
-        # 1. Cek Port Lokal
         try:
             test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             test_sock.bind(('0.0.0.0', self.my_port))
@@ -61,12 +57,8 @@ class ChatCore:
         except OSError:
             return False, f"Port {self.my_port} sudah digunakan aplikasi lain!"
 
-        # 2. Cek Koneksi DNS & Username
-        # Kita coba QUERY username kita sendiri. 
-        # Jika Timeout -> DNS Mati. 
-        # Jika Ada Hasil -> Username sudah dipakai orang lain.
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.settimeout(2) # 2 detik timeout
+        sock.settimeout(2)
         try:
             msg = {"command": "QUERY", "domain": self.username}
             sock.sendto(json.dumps(msg).encode(), (self.dns_ip, self.dns_port))
@@ -76,7 +68,6 @@ class ChatCore:
             if resp['status'] == 'ok':
                 return False, f"Username '{self.username}' sudah dipakai orang lain!"
             else:
-                # Username belum ada (Not Found) = Aman
                 return True, "OK"
         except socket.timeout:
             return False, f"DNS Server ({self.dns_ip}) tidak merespon/down!"
@@ -98,22 +89,19 @@ class ChatCore:
         self.running = True
         self.my_ip = self.get_lan_ip()
         
-        # Start Listener
         t = threading.Thread(target=self.start_listener, daemon=True)
         t.start()
         
-        # Register
         self.dns_register(self.username, self.my_ip, self.my_port, self.current_group)
         atexit.register(lambda: self.dns_deregister(self.username))
         
         self.log(f"[*] Connected to DNS. Welcome {self.username}!")
-        self.log(f"Welcome to {self.current_group}") # Trigger UI update
+        self.log(f"Welcome to {self.current_group}")
 
     def stop(self):
         self.running = False
         self.dns_deregister(self.username)
 
-    # --- MODUL DNS ---
     def dns_register(self, domain, my_ip, my_port, group_name):
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -163,7 +151,6 @@ class ChatCore:
         except: return []
         finally: sock.close()
 
-    # --- MODUL CHAT ---
     def start_listener(self):
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -183,7 +170,6 @@ class ChatCore:
 
             if ":" in msg:
                 sender, content = msg.split(":", 1)
-                # GUI akan memproses tag (!!PRIV!! dll) di fungsi update_display
                 self.log(f"[{sender}]: {content}")
         except: pass
         finally: conn.close()
@@ -196,7 +182,6 @@ class ChatCore:
                 s.settimeout(1)
                 s.connect((ip, int(port)))
                 
-                # Payload dengan Username
                 payload = f"{self.username}:{msg}"
                 secure = SimpleSecurity.encrypt(payload)
                 s.send(f"[SEC]{secure}".encode())
@@ -212,12 +197,10 @@ class ChatCore:
             self.log("[Info] Tidak ada user lain.")
             return
         
-        # Tagging Context untuk penerima
         context_tag = ""
         if target_group is None: 
             context_tag = "[BROADCAST] "
         else:
-            # Tag Group agar penerima tau ini dari group mana
             context_tag = f"!!GRP:{target_group}!! "
 
         final_msg = f"{context_tag}{message}"
@@ -226,7 +209,6 @@ class ChatCore:
         for user in users:
             if self.send_direct_msg(user, final_msg): count += 1
         
-        # Balikan jumlah terkirim (opsional)
         return count
 
     def switch_group(self, new_group):
@@ -251,35 +233,28 @@ class ChatCore:
         elif msg == '/exitgroup':
             self.switch_group('global')
         
-        # Logic Pengiriman (GUI memanggil ini dengan format yg sudah disiapkan)
-        # Tapi kita perlu inject TAG agar penerima tau konteksnya
-        
         elif msg.startswith('@broadcast '):
             clean = msg.split(" ", 1)[1]
             self.broadcast_logic(clean, target_group=None)
+            self.log(f"[Me]: [BROADCAST] {clean}")
             
         elif msg.startswith('@'):
-            # Private Chat
             try:
                 parts = msg.split(" ", 1)
                 target = parts[0][1:]
                 clean_msg = parts[1]
                 
-                # Inject Tag !!PRIV!!
                 final_msg = f"!!PRIV!! {clean_msg}"
                 
                 if self.send_direct_msg(target, final_msg):
-                    # Callback format khusus agar GUI bisa render "Me (Private)"
                     self.log(f"[Me]: !!PRIV!! >{target}< {clean_msg}")
                 else:
                     self.log(f"[!] Gagal kirim ke {target} (Offline/Unknown)")
             except: self.log("[!] Format: @user pesan")
             
         else:
-            # Group Chat
             if self.current_group == 'global':
                 self.log("[X] Global Lobby: Silahkan masuk ke group atau pilih chat broadcast/private!")
             else:
                 self.broadcast_logic(msg, target_group=self.current_group)
-                # Log lokal agar muncul di bubble kita sendiri dengan label group
                 self.log(f"[Me]: !!GRP:{self.current_group}!! {msg}")

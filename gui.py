@@ -21,7 +21,7 @@ class ChatGUI(ctk.CTk):
         
         self.e_ip = ctk.CTkEntry(self.login_frame, placeholder_text="IP DNS Server", width=300, height=40)
         self.e_ip.pack(pady=10)
-        self.e_ip.insert(0, "192.168.1.X") # Sesuaikan default
+        self.e_ip.insert(0, "192.168.1.X")
 
         self.e_user = ctk.CTkEntry(self.login_frame, placeholder_text="Username", width=300, height=40)
         self.e_user.pack(pady=10)
@@ -57,9 +57,9 @@ class ChatGUI(ctk.CTk):
         self.ctrl_frame = ctk.CTkFrame(self.chat_frame, fg_color="#2b2b2b", height=50)
         self.ctrl_frame.pack(fill="x", padx=0, pady=0)
 
-        self.combo_mode = ctk.CTkComboBox(self.ctrl_frame, values=["Broadcast", "Private", "Group"], command=self.on_mode_change, width=110)
+        self.combo_mode = ctk.CTkSegmentedButton(self.ctrl_frame, values=["Broadcast", "Group", "Private"], command=self.on_mode_change)
         self.combo_mode.pack(side="left", padx=10, pady=10)
-        self.combo_mode.set("Broadcast") # Default mode
+        self.combo_mode.set("Broadcast")
 
         self.e_target = ctk.CTkEntry(self.ctrl_frame, placeholder_text="Target...", width=120)
         # Default hidden
@@ -83,7 +83,7 @@ class ChatGUI(ctk.CTk):
 
         # Disable tombol biar ga dipencet 2x
         self.btn_connect.configure(state="disabled", text="Checking...")
-        self.update() # Force update UI
+        self.update()
 
         # Inisialisasi Backend sementara untuk cek validasi
         temp_backend = ChatCore(ip, 9000, user, port, None)
@@ -104,7 +104,7 @@ class ChatGUI(ctk.CTk):
             self.btn_connect.configure(state="normal", text="Connect & Validate")
 
     def on_mode_change(self, choice):
-        # FIX: Memperbaiki logic placeholder text
+        # Perbaikan logic placeholder text
         if choice == "Private":
             self.e_target.pack(side="left", padx=5, before=self.e_msg)
             self.e_msg.configure(placeholder_text="Ketik pesan Private ke target...")
@@ -141,7 +141,7 @@ class ChatGUI(ctk.CTk):
         if context_label:
             header_text += f" {context_label}"
             
-        if not is_me or context_label: # Tampilkan label 'You' juga kalau ada konteks (misal You (Private))
+        if not is_me or context_label:
             lbl_color = "#FFD700" if "Private" in (context_label or "") else "gray"
             ctk.CTkLabel(content_frame, text=header_text, font=("Arial", 10, "bold"), text_color=lbl_color).pack(anchor="w", padx=5)
 
@@ -160,19 +160,15 @@ class ChatGUI(ctk.CTk):
             if "Welcome to" in clean_msg:
                 new_room = clean_msg.split("Welcome to ")[1].replace("!", "").strip()
                 self.lbl_room.configure(text=f"Room: {new_room}")
-                # Tombol exit group hanya aktif kalau bukan global (opsional visual)
                 state = "disabled" if new_room == "global" else "normal"
                 self.btn_exit_group.configure(state=state)
 
             self.add_bubble("System", clean_msg, False, is_system=True)
             return
 
-        # Parsing Pesan Chat (Dengan Tag Baru)
+        # Parsing Pesan Chat
         if ":" in clean_msg:
             try:
-                # Format: [Sender]: Message
-                # Format: [Sender]: !!TAG!! Message
-                
                 parts = clean_msg.split("]: ", 1)
                 sender = parts[0].replace("[", "").strip()
                 content = parts[1].strip()
@@ -185,23 +181,20 @@ class ChatGUI(ctk.CTk):
                     context = "(Private)"
                     # Handle Sender nama khusus dari log lokal
                     if ">" in content and "<" in content and sender == "Me":
-                        # Format lokal: >Target< Pesan
                         target_name = content.split("<")[0].replace(">", "").strip()
                         content = content.split("<")[1].strip()
                         context = f"(Private to {target_name})"
 
                 # 2. Deteksi Tag Group
                 elif "!!GRP:" in content:
-                    # Format: !!GRP:NamaGroup!! Pesan
-                    grp_part = content.split("!!")[1] # GRP:NamaGroup
+                    grp_part = content.split("!!")[1]
                     grp_name = grp_part.split(":")[1]
                     content = content.split("!!", 2)[2].strip()
                     context = f"(Group: {grp_name})"
 
                 # 3. Deteksi Broadcast
-                elif "[BROADCAST]" in content: # FIX: Menghapus or "GLOBAL" in sender yang ambigu
+                elif "[BROADCAST]" in content:
                     content = content.replace("[BROADCAST]", "").strip()
-                    # Menghapus [GLOBAL] untuk compatibility log lama (jika ada)
                     sender = sender.replace("[GLOBAL]", "").replace("[", "").strip() 
                     context = "(GLOBAL)"
 
@@ -209,7 +202,6 @@ class ChatGUI(ctk.CTk):
                 self.add_bubble(sender, content, is_me, context_label=context)
                 
             except Exception as e:
-                # Menambahkan logging error untuk debugging
                 print(f"[GUI PARSING ERROR] {e} for message: {clean_msg}")
                 self.add_bubble("System", clean_msg, False, is_system=True)
 
